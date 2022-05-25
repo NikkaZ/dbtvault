@@ -17,6 +17,7 @@
 
     {#- Add aliases of derived columns to excludes and full SQL to includes -#}
     {%- for col in columns -%}
+
         {%- if dbtvault.is_list(columns[col]) -%}
             {%- set column_list = [] -%}
 
@@ -24,14 +25,14 @@
                 {%- set column_str = dbtvault.as_constant(concat_component) -%}
                 {%- do column_list.append(column_str) -%}
             {%- endfor -%}
-
-            {%- set concat_string = "CONCAT_WS(" ~ "'||', " ~ column_list | join(", ") ~ ") AS " ~ col -%}
+            {%- set concat = dbtvault.concat_ws(column_list, "||") -%}
+            {%- set concat_string = concat ~ " AS " ~ dbtvault.escape_column_names(col) -%}
 
             {%- do der_columns.append(concat_string) -%}
             {%- set exclude_columns = exclude_columns + columns[col] -%}
         {% else %}
             {%- set column_str = dbtvault.as_constant(columns[col]) -%}
-            {%- do der_columns.append(column_str ~ " AS " ~ col) -%}
+            {%- do der_columns.append(column_str ~ " AS " ~ dbtvault.escape_column_names(col)) -%}
             {%- do exclude_columns.append(col) -%}
         {% endif %}
 
@@ -42,13 +43,13 @@
 
         {%- for col in source_cols -%}
             {%- if col not in exclude_columns -%}
-                {%- do src_columns.append(col) -%}
+                {%- do src_columns.append(dbtvault.escape_column_names(col)) -%}
             {%- endif -%}
         {%- endfor -%}
 
     {%- endif -%}
 
-    {#- Makes sure the columns are appended in a logical order. Derived columns then source columns -#}
+    {#- Makes sure the columns are appended in a logical order. Source columns then derived columns -#}
     {%- set include_columns = src_columns + der_columns -%}
 
     {#- Print out all columns in includes -#}

@@ -1,12 +1,16 @@
 {% materialization vault_insert_by_rank, default -%}
 
-    {%- set full_refresh_mode = flags.FULL_REFRESH -%}
+    {%- set full_refresh_mode = (should_full_refresh()) -%}
 
-    {%- set target_relation = this -%}
+    {% if target.type == "sqlserver" %}
+        {%- set target_relation = this.incorporate(type='table') -%}
+    {%  else %}
+        {%- set target_relation = this -%}
+    {% endif %}
     {%- set existing_relation = load_relation(this) -%}
-    {%- set tmp_relation = make_temp_relation(this) -%}
+    {%- set tmp_relation = make_temp_relation(target_relation) -%}
 
-    {%- set rank_column = config.require('rank_column') -%}
+    {%- set rank_column = dbtvault.escape_column_names(config.require('rank_column')) -%}
     {%- set rank_source_models = config.require('rank_source_models') -%}
 
     {%- set min_max_ranks = dbtvault.get_min_max_ranks(rank_column, rank_source_models) | as_native -%}
@@ -23,24 +27,21 @@
     {% if existing_relation is none %}
 
         {% set filtered_sql = dbtvault.replace_placeholder_with_rank_filter(sql, rank_column, 1) %}
-
         {% set build_sql = create_table_as(False, target_relation, filtered_sql) %}
 
         {% do to_drop.append(tmp_relation) %}
 
-    {% elif existing_relation.is_view or full_refresh_mode %}
-        {#-- Make sure the backup doesn't exist so we don't encounter issues with the rename below #}
-        {% set backup_identifier = existing_relation.identifier ~ "__dbt_backup" %}
-        {% set backup_relation = existing_relation.incorporate(path={"identifier": backup_identifier}) %}
+    {% elif existing_relation.is_view %}
 
-        {% do adapter.drop_relation(backup_relation) %}
-        {% do adapter.rename_relation(target_relation, backup_relation) %}
+        {{ log("Dropping relation " ~ target_relation ~ " because it is a view and this model is a table (vault_insert_by_rank).") }}
+        {% do adapter.drop_relation(existing_relation) %}
 
         {% set filtered_sql = dbtvault.replace_placeholder_with_rank_filter(sql, rank_column, 1) %}
         {% set build_sql = create_table_as(False, target_relation, filtered_sql) %}
 
-        {% do to_drop.append(tmp_relation) %}
-        {% do to_drop.append(backup_relation) %}
+    {% elif full_refresh_mode %}
+        {% set filtered_sql = dbtvault.replace_placeholder_with_rank_filter(sql, rank_column, 1) %}
+        {% set build_sql = create_table_as(False, target_relation, filtered_sql) %}
     {% else %}
 
         {% set target_columns = adapter.get_columns_in_relation(target_relation) %}
@@ -55,10 +56,13 @@
 
             {{ dbt_utils.log_info("Running for {} {} of {} on column '{}' [{}]".format('rank', iteration_number, min_max_ranks.max_rank, rank_column, model.unique_id)) }}
 
-            {% set tmp_relation = make_temp_relation(this) %}
+            {% set tmp_relation = make_temp_relation(target_relation) %}
 
+            {# This call statement drops and then creates a temporary table #}
+            {# but MSSQL will fail to drop any temporary table created by a previous loop iteration #}
+            {# See MSSQL note and drop code below #}
             {% call statement() -%}
-                {{ dbt.create_table_as(True, tmp_relation, filtered_sql) }}
+                {{ create_table_as(True, tmp_relation, filtered_sql) }}
             {%- endcall %}
 
             {{ adapter.expand_target_column_types(from_relation=tmp_relation,
@@ -66,10 +70,10 @@
 
             {%- set insert_query_name = 'main-' ~ i -%}
             {% call statement(insert_query_name, fetch_result=True) -%}
-                insert into {{ target_relation }} ({{ target_cols_csv }})
+                INSERT INTO {{ target_relation }} ({{ target_cols_csv }})
                 (
-                    select {{ target_cols_csv }}
-                    from {{ tmp_relation.include(schema=True) }}
+                    SELECT {{ target_cols_csv }}
+                    FROM {{ tmp_relation.include(schema=True) }}
                 );
             {%- endcall %}
 
@@ -89,12 +93,19 @@
                                                                                           rows_inserted,
                                                                                           model.unique_id)) }}
 
+            {% if target.type == "sqlserver" %}
+                {# In MSSQL a temporary table can only be dropped by the connection or session that created it #}
+                {# so drop it now before the commit below closes this session #}
+                {%- set drop_query_name = 'DROP_QUERY-' ~ i -%}
+                {% call statement(drop_query_name, fetch_result=True) -%}
+                    DROP TABLE {{ tmp_relation }};
+                {%- endcall %}
+            {%  endif %}
 
             {% do to_drop.append(tmp_relation) %}
             {% do adapter.commit() %}
 
         {% endfor %}
-
         {% call noop_statement('main', "INSERT {}".format(loop_vars['sum_rows_inserted']) ) -%}
             {{ filtered_sql }}
         {%- endcall %}
@@ -129,6 +140,8 @@
             {% do adapter.drop_relation(rel) %}
         {% endif %}
     {% endfor %}
+
+    {% set target_relation = target_relation.incorporate(type='table') %}
 
     {{ run_hooks(post_hooks, inside_transaction=False) }}
 

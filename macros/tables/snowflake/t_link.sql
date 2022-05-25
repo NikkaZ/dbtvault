@@ -12,6 +12,13 @@
                                        src_ldts=src_ldts, src_source=src_source,
                                        source_model=source_model) -}}
 
+{%- set src_pk = dbtvault.escape_column_names(src_pk) -%}
+{%- set src_fk = dbtvault.escape_column_names(src_fk) -%}
+{%- set src_payload = dbtvault.escape_column_names(src_payload) -%}
+{%- set src_eff = dbtvault.escape_column_names(src_eff) -%}
+{%- set src_ldts = dbtvault.escape_column_names(src_ldts) -%}
+{%- set src_source = dbtvault.escape_column_names(src_source) -%}
+
 {%- set source_cols = dbtvault.expand_column_list(columns=[src_pk, src_fk, src_payload, src_eff, src_ldts, src_source]) -%}
 {%- set fk_cols = dbtvault.expand_column_list([src_fk]) -%}
 
@@ -38,8 +45,8 @@ records_to_insert AS (
     FROM stage AS stg
     {% if dbtvault.is_any_incremental() -%}
     LEFT JOIN {{ this }} AS tgt
-    ON {{ dbtvault.prefix([src_pk], 'stg') }} = {{ dbtvault.prefix([src_pk], 'tgt') }}
-    WHERE {{ dbtvault.prefix([src_pk], 'tgt') }} IS NULL
+    ON {{ dbtvault.multikey(src_pk, prefix=['stg','tgt'], condition='=') }}
+    WHERE {{ dbtvault.multikey(src_pk, prefix='tgt', condition='IS NULL') }}
     {%- endif %}
 )
 

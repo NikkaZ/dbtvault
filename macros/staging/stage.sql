@@ -19,13 +19,13 @@
 
     {%- set error_message -%}
     Staging error: Missing source_model configuration. A source model name must be provided.
-    e.g. 
+    e.g.
     [REF STYLE]
     source_model: model_name
     OR
     [SOURCES STYLE]
     source_model:
-        source_name: source_table_name"
+        source_name: source_table_name
     {%- endset -%}
 
     {{- exceptions.raise_compiler_error(error_message) -}}
@@ -48,11 +48,11 @@
     {%- set all_source_columns = [] -%}
 {%- endif -%}
 
-{%- set derived_column_names = dbtvault.extract_column_names(derived_columns) -%}
-{%- set hashed_column_names = dbtvault.extract_column_names(hashed_columns) -%}
-{%- set ranked_column_names = dbtvault.extract_column_names(ranked_columns) -%}
-{%- set exclude_column_names = derived_column_names + hashed_column_names %}
-{%- set source_and_derived_column_names = all_source_columns + derived_column_names %}
+{%- set derived_column_names = dbtvault.extract_column_names(derived_columns) | map('upper') | list -%}
+{%- set hashed_column_names = dbtvault.extract_column_names(hashed_columns) | map('upper') | list -%}
+{%- set ranked_column_names = dbtvault.extract_column_names(ranked_columns) | map('upper') | list -%}
+{%- set exclude_column_names = derived_column_names + hashed_column_names | map('upper') | list -%}
+{%- set source_and_derived_column_names = (all_source_columns + derived_column_names) | map('upper') | unique | list -%}
 
 {%- set source_columns_to_select = dbtvault.process_columns_to_select(all_source_columns, exclude_column_names) -%}
 {%- set derived_columns_to_select = dbtvault.process_columns_to_select(source_and_derived_column_names, hashed_column_names) | unique | list -%}
@@ -74,7 +74,7 @@ WITH source_data AS (
 
     SELECT
 
-    {{- "\n\n    " ~ dbtvault.print_list(all_source_columns) if all_source_columns else " *" }}
+    {{- "\n\n    " ~ dbtvault.print_list(dbtvault.escape_column_names(all_source_columns)) if all_source_columns else " *" }}
 
     FROM {{ source_relation }}
     {%- set last_cte = "source_data" %}
@@ -100,7 +100,7 @@ hashed_columns AS (
 
     SELECT
 
-    {{ dbtvault.print_list(derived_columns_to_select) }},
+    {{ dbtvault.print_list(dbtvault.escape_column_names(derived_columns_to_select)) }},
 
     {% set processed_hash_columns = dbtvault.process_hash_column_excludes(hashed_columns, all_source_columns) -%}
     {{- dbtvault.hash_columns(columns=processed_hash_columns) | indent(4) }}
@@ -131,7 +131,7 @@ columns_to_select AS (
 
     SELECT
 
-    {{ dbtvault.print_list(final_columns_to_select) }}
+    {{ dbtvault.print_list(dbtvault.escape_column_names(final_columns_to_select | unique | list)) }}
 
     FROM {{ last_cte }}
 )
